@@ -1,0 +1,105 @@
+name: DAST Scan with ZAP and Nuclei (Authenticated)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  dast:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Start OWASP Juice Shop Container
+        run: |
+          docker run -d -p 8080:3000 --name juice-shop bkimminich/juice-shop
+          echo "Waiting for Juice Shop to start..."
+          sleep 30
+          echo "Juice Shop should be running on http://localhost:8080"
+
+      - name: Create ZAP Automation Plan for Authenticated Scan
+        id: create_zap_plan
+        run: |
+          TARGET_URL="http://localhost:8080"
+          REPORT_FILE="zap-report.sarif"
+
+          cat << EOF > zap-automation-plan.yaml
+          ---
+          env:
+            contexts:
+              - name: "JuiceShopContext"
+                urls:
+                  - "${TARGET_URL}.*"
+                authentication:
+                  method: "formBasedAuthentication"
+                  loginPageUrl: "${TARGET_URL}/#/login"
+                  loginRequest: "POST ${TARGET_URL}/rest/user/login"
+                  loginRequestData: "email={%username%}&password={%password%}"
+                users:
+                  - name: "adminuser"
+                    credentials:
+                      username: "admin@juice-sh.op"
+                      password: "admin"
+            parameters:
+              failOnError: true
+              failOnWarning: false
+          jobs:
+            - name: "authenticate"
+              type: "authentication"
+              parameters:
+                context: "JuiceShopContext"
+                user: "adminuser"
+            - name: "spider"
+              type: "spider"
+              parameters:
+                context: "JuiceShopContext"
+                user: "adminuser"
+            - name: "activeScan"
+              type: "activeScan"
+              parameters:
+                context: "JuiceShopContext"
+                user: "adminuser"
+                maxScanDuration: 10
+            - name: "report"
+              type: "report"
+              parameters:
+                template: "sarif-json"
+                reportDir: "."
+                reportName: "${REPORT_FILE}"
+          EOF
+          echo "ZAP Automation Plan created."
+
+      - name: Run ZAP Authenticated Scan
+        run: |
+          ZAP_DOCKER_IMAGE="owasp/zap2docker-stable:2.14.0"
+
+          echo "Attempting to pull ${ZAP_DOCKER_IMAGE} image..."
+          docker pull "${ZAP_DOCKER_IMAGE}" || { echo "Failed to pull ZAP Docker image. Please check Docker Hub status or network connectivity."; exit 1; }
+          echo "Image pulled successfully."
+
+          docker run --rm \
+            -v $(pwd):/zap/wrk:rw \
+            "${ZAP_DOCKER_IMAGE}" zap.sh -cmd -autorun /zap/wrk/zap-automation-plan.yaml
+
+          echo "ZAP authenticated scan completed."
+
+      - name: Upload ZAP SARIF Report to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: zap-report.sarif
+          category: dast-owasp-zap-authenticated
+
+      - name: Upload Other Reports (if any)
+        uses: actions/upload-artifact@v4
+        with:
+          name: other-dast-reports
+          path: |
+            # nuclei.json
+          retention-days: 5
