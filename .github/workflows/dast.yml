@@ -27,21 +27,17 @@ jobs:
       - name: Create ZAP Automation Plan for Authenticated Scan
         id: create_zap_plan
         run: |
-          TARGET_URL="http://localhost:8080"
-          REPORT_FILE="zap-report.sarif"
-
-          cat << EOF > zap-automation-plan.yaml
-          ---
+          cat << 'EOF' > zap-automation-plan.yaml
           env:
             contexts:
               - name: "JuiceShopContext"
                 urls:
-                  - "${TARGET_URL}"
+                  - "http://localhost:8080"
                 authentication:
-                  method: "formBasedAuthentication"
+                  method: "formBased"
                   parameters:
-                    loginPageUrl: "${TARGET_URL}/#/login"
-                    loginRequestUrl: "${TARGET_URL}/rest/user/login"
+                    loginPageUrl: "http://localhost:8080/#/login"
+                    loginRequestUrl: "http://localhost:8080/rest/user/login"
                     loginRequestBody: "email={%username%}&password={%password%}"
                   verification:
                     method: "response"
@@ -55,29 +51,25 @@ jobs:
             parameters:
               failOnError: true
               failOnWarning: false
+
           jobs:
-            - name: "authentication"
-              type: "authentication"
+            - type: spider
+              name: spider
               parameters:
                 context: "JuiceShopContext"
                 user: "adminuser"
-            - name: "spider"
-              type: "spider"
+
+            - type: activeScan
+              name: activescan
               parameters:
                 context: "JuiceShopContext"
                 user: "adminuser"
-            - name: "activeScan"
-              type: "activeScan"
-              parameters:
-                context: "JuiceShopContext"
-                user: "adminuser"
-                maxScanDuration: 10
-            - name: "report"
-              type: "report"
+
+            - type: report
+              name: report
               parameters:
                 template: "sarif-json"
-                reportDir: "/zap/wrk"
-                reportName: "${REPORT_FILE}"
+                filename: "zap-report.sarif"
           EOF
           echo "ZAP Automation Plan created."
 
@@ -89,7 +81,9 @@ jobs:
           docker pull "${ZAP_IMAGE}"
 
           echo "Running ZAP scan..."
-          docker run --rm -v $(pwd):/zap/wrk "${ZAP_IMAGE}" zap.sh -cmd -autorun /zap/wrk/zap-automation-plan.yaml
+          docker run --rm \
+            -v $(pwd):/zap/wrk \
+            "${ZAP_IMAGE}" zap.sh -cmd -autorun /zap/wrk/zap-automation-plan.yaml
 
           echo "ZAP authenticated scan completed."
 
@@ -104,5 +98,5 @@ jobs:
         with:
           name: other-dast-reports
           path: |
-            # Add other report files here if needed
+            zap-report.sarif
           retention-days: 5
