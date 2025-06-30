@@ -24,14 +24,6 @@ jobs:
           sleep 30
           echo "Juice Shop should be running on http://localhost:8080"
 
-      - name: Docker Login to Pull ZAP Image
-        # This step authenticates with Docker Hub to avoid pull rate limits or access denied errors.
-        # Requires DOCKERHUB_USERNAME and DOCKERHUB_TOKEN to be set as GitHub Secrets.
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Create ZAP Automation Plan for Authenticated Scan
         id: create_zap_plan
         run: |
@@ -44,12 +36,17 @@ jobs:
             contexts:
               - name: "JuiceShopContext"
                 urls:
-                  - "${TARGET_URL}.*"
+                  - "${TARGET_URL}"
                 authentication:
                   method: "formBasedAuthentication"
-                  loginPageUrl: "${TARGET_URL}/#/login"
-                  loginRequest: "POST ${TARGET_URL}/rest/user/login"
-                  loginRequestData: "email={%username%}&password={%password%}"
+                  parameters:
+                    loginPageUrl: "${TARGET_URL}/#/login"
+                    loginRequestUrl: "${TARGET_URL}/rest/user/login"
+                    loginRequestBody: "email={%username%}&password={%password%}"
+                  verification:
+                    method: "response"
+                    loggedInRegex: "Logout"
+                    loggedOutRegex: "Login"
                 users:
                   - name: "adminuser"
                     credentials:
@@ -59,7 +56,7 @@ jobs:
               failOnError: true
               failOnWarning: false
           jobs:
-            - name: "authenticate"
+            - name: "authentication"
               type: "authentication"
               parameters:
                 context: "JuiceShopContext"
@@ -79,23 +76,20 @@ jobs:
               type: "report"
               parameters:
                 template: "sarif-json"
-                reportDir: "."
+                reportDir: "/zap/wrk"
                 reportName: "${REPORT_FILE}"
           EOF
           echo "ZAP Automation Plan created."
 
       - name: Run ZAP Authenticated Scan
         run: |
-          ZAP_DOCKER_IMAGE="owasp/zap2docker-stable:2.14.0"
+          ZAP_IMAGE="ghcr.io/zaproxy/zaproxy:stable"
 
-          echo "Attempting to pull ${ZAP_DOCKER_IMAGE} image..."
-          # The docker pull command should now succeed after logging in
-          docker pull "${ZAP_DOCKER_IMAGE}" || { echo "Failed to pull ZAP Docker image even after login. Please check Docker Hub credentials or network connectivity."; exit 1; }
-          echo "Image pulled successfully."
+          echo "Pulling latest ZAP image..."
+          docker pull "${ZAP_IMAGE}"
 
-          docker run --rm \
-            -v $(pwd):/zap/wrk:rw \
-            "${ZAP_DOCKER_IMAGE}" zap.sh -cmd -autorun /zap/wrk/zap-automation-plan.yaml
+          echo "Running ZAP scan..."
+          docker run --rm -v $(pwd):/zap/wrk "${ZAP_IMAGE}" zap.sh -cmd -autorun /zap/wrk/zap-automation-plan.yaml
 
           echo "ZAP authenticated scan completed."
 
@@ -110,6 +104,5 @@ jobs:
         with:
           name: other-dast-reports
           path: |
-            # No Nuclei reports to upload
+            # Add other report files here if needed
           retention-days: 5
-
